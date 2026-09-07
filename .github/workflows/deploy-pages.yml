@@ -55,6 +55,15 @@ jobs:
       - name: Import project
         run: /tmp/godot/godot --headless --editor --path . --quit
 
+      - name: Runtime smoke test
+        run: |
+          set -o pipefail
+          /tmp/godot/godot --headless --path . --quit-after 3 2>&1 | tee /tmp/godot-runtime.log
+          if grep -E "SCRIPT ERROR|ERROR:.*main.gd|Invalid call|Invalid access" /tmp/godot-runtime.log; then
+            echo "Godot runtime error detected"
+            exit 1
+          fi
+
       - name: Export Web build
         run: |
           mkdir -p build/web
