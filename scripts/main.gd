@@ -1,59 +1,107 @@
 extends Control
 
-# Nim Lab — a browser-friendly Nim trainer for Math Society.
-# Standard: take any positive number from one pile; last token wins.
-# Misere/video mode: same moves, but taking the last token loses.
+# The Game of Nim — matchstick edition.
+# Classic 1-3-5-7 layout using the video's misere rule: taking the last match loses.
 
-const BG := Color("#09101d")
-const PANEL := Color("#111b2e")
-const PANEL_2 := Color("#17233a")
-const TEXT := Color("#eef4ff")
-const MUTED := Color("#9caecc")
-const ACCENT := Color("#6aa9ff")
-const ACCENT_DARK := Color("#2f5f9d")
-const GREEN := Color("#63d69a")
-const RED := Color("#ff7d79")
-const GOLD := Color("#f0bf68")
+const TABLE := Color("#241813")
+const TABLE_LIGHT := Color("#35251e")
+const PAPER := Color("#f3ead6")
+const PAPER_2 := Color("#e8dcc3")
+const INK := Color("#29231f")
+const MUTED := Color("#74685d")
+const RED := Color("#8f3029")
+const RED_DARK := Color("#68211d")
+const GOLD := Color("#c49345")
+const GREEN := Color("#486f52")
+const DISABLED := Color("#b7aa96")
+
+const CLASSIC_PILES: Array[int] = [1, 3, 5, 7]
+const COMPUTER_MATCH_DELAY := 0.5
+
+enum Phase {
+    WAIT_PLAYER,
+    PLAYER,
+    COMPUTER,
+    GAME_OVER
+}
+
+class MatchstickButton:
+    extends Button
+
+    var row_index: int = 0
+    var match_index: int = 0
+    var active_match: bool = true
+
+    func _init() -> void:
+        flat = true
+        custom_minimum_size = Vector2(34, 104)
+        focus_mode = Control.FOCUS_ALL
+        mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+        tooltip_text = "Remove this match"
+        add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+
+    func set_active(value: bool) -> void:
+        active_match = value
+        disabled = not value
+        mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if value else Control.CURSOR_ARROW
+        queue_redraw()
+
+    func _draw() -> void:
+        var cx := size.x * 0.5
+        var shaft_top := 26.0
+        var shaft_bottom := size.y - 7.0
+        var shaft_height := maxf(44.0, shaft_bottom - shaft_top)
+        var alpha := 1.0 if active_match else 0.45
+
+        # soft shadow
+        draw_rect(Rect2(cx - 2.0, shaft_top + 3.0, 7.0, shaft_height), Color(0.16, 0.10, 0.06, 0.18 * alpha), true)
+        draw_circle(Vector2(cx + 2.0, 19.0), 9.5, Color(0.16, 0.08, 0.05, 0.18 * alpha))
+
+        # wooden shaft with a light centre stripe
+        draw_rect(Rect2(cx - 3.5, shaft_top, 7.0, shaft_height), Color(0.69, 0.50, 0.27, alpha), true)
+        draw_rect(Rect2(cx - 1.5, shaft_top, 3.0, shaft_height), Color(0.91, 0.75, 0.46, alpha), true)
+        draw_rect(Rect2(cx + 2.0, shaft_top, 1.5, shaft_height), Color(0.48, 0.31, 0.16, alpha), true)
+
+        # match head
+        draw_circle(Vector2(cx, 18.0), 9.0, Color(0.40, 0.11, 0.09, alpha))
+        draw_circle(Vector2(cx - 1.0, 16.5), 7.0, Color(0.58, 0.18, 0.15, alpha))
+        draw_circle(Vector2(cx - 3.2, 13.8), 2.4, Color(0.78, 0.35, 0.28, alpha))
+
+        if active_match and is_hovered():
+            draw_arc(Vector2(cx, 18.0), 13.0, 0.0, TAU, 24, Color(0.55, 0.19, 0.16, 0.75), 2.0)
+
 
 var rng := RandomNumberGenerator.new()
-var piles: Array[int] = [3, 4, 5]
-var initial_piles: Array[int] = [3, 4, 5]
-var pile_inputs: Array[SpinBox] = []
-var game_active := false
-var player_turn := true
-var game_over := false
-var selected_pile := -1
-var strategy_visible := false
+var phase: Phase = Phase.WAIT_PLAYER
+var piles: Array[int] = CLASSIC_PILES.duplicate()
+var turn_start_piles: Array[int] = CLASSIC_PILES.duplicate()
+var selected_row := -1
+var removed_this_turn := 0
+var game_serial := 0
 
-var setup_panel: PanelContainer
-var setup_pile_row: HBoxContainer
-var setup_analysis: RichTextLabel
-var game_panel: PanelContainer
-var piles_grid: GridContainer
-var removal_box: HBoxContainer
+var start_option: OptionButton
+var new_game_button: Button
 var status_label: Label
-var position_label: Label
-var message_label: RichTextLabel
-var strategy_panel: PanelContainer
-var strategy_text: RichTextLabel
-var pile_count_option: OptionButton
-var first_option: OptionButton
-var ai_option: OptionButton
-var rule_option: OptionButton
-var random_max_option: OptionButton
-var hint_button: Button
-var strategy_button: Button
+var substatus_label: Label
+var board_panel: PanelContainer
+var rows_box: VBoxContainer
+var match_rows: Array[HBoxContainer] = []
+var count_labels: Array[Label] = []
+var action_button: Button
+var undo_button: Button
+var message_label: Label
+var remaining_label: Label
+
 
 func _ready() -> void:
     rng.randomize()
     _build_ui()
-    _rebuild_pile_inputs(3, [3, 4, 5])
-    _update_setup_analysis()
-    _render_game()
+    _start_new_game()
+
 
 func _build_ui() -> void:
     var bg := ColorRect.new()
-    bg.color = BG
+    bg.color = TABLE
     bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
     add_child(bg)
 
@@ -63,586 +111,543 @@ func _build_ui() -> void:
     add_child(scroll)
 
     var outer := MarginContainer.new()
-    outer.add_theme_constant_override("margin_left", 28)
-    outer.add_theme_constant_override("margin_right", 28)
-    outer.add_theme_constant_override("margin_top", 24)
-    outer.add_theme_constant_override("margin_bottom", 32)
+    outer.add_theme_constant_override("margin_left", 24)
+    outer.add_theme_constant_override("margin_right", 24)
+    outer.add_theme_constant_override("margin_top", 22)
+    outer.add_theme_constant_override("margin_bottom", 28)
     outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     scroll.add_child(outer)
 
     var main := VBoxContainer.new()
-    main.add_theme_constant_override("separation", 16)
+    main.add_theme_constant_override("separation", 14)
     main.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     outer.add_child(main)
 
+    var header := HBoxContainer.new()
+    header.add_theme_constant_override("separation", 16)
+    main.add_child(header)
+
+    var title_block := VBoxContainer.new()
+    title_block.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title_block.add_theme_constant_override("separation", 2)
+    header.add_child(title_block)
+
     var title := Label.new()
-    title.text = "NIM LAB"
-    title.add_theme_color_override("font_color", TEXT)
-    title.add_theme_font_size_override("font_size", 34)
-    main.add_child(title)
+    title.text = "THE GAME OF NIM"
+    title.add_theme_color_override("font_color", PAPER)
+    title.add_theme_font_size_override("font_size", 32)
+    title_block.add_child(title)
 
     var subtitle := Label.new()
-    subtitle.text = "Practice the strategy, vary the piles, and reveal the binary trick."
-    subtitle.add_theme_color_override("font_color", MUTED)
-    subtitle.add_theme_font_size_override("font_size", 16)
-    main.add_child(subtitle)
+    subtitle.text = "Matchstick edition • classic 1–3–5–7 board"
+    subtitle.add_theme_color_override("font_color", Color("#cfbea9"))
+    subtitle.add_theme_font_size_override("font_size", 15)
+    title_block.add_child(subtitle)
 
-    setup_panel = _make_panel(PANEL)
-    main.add_child(setup_panel)
-    _build_setup_contents()
+    var setup := VBoxContainer.new()
+    setup.alignment = BoxContainer.ALIGNMENT_END
+    setup.add_theme_constant_override("separation", 4)
+    header.add_child(setup)
 
-    game_panel = _make_panel(PANEL)
-    main.add_child(game_panel)
-    _build_game_contents()
+    var who_label := Label.new()
+    who_label.text = "WHO GOES FIRST?"
+    who_label.add_theme_color_override("font_color", Color("#cfbea9"))
+    who_label.add_theme_font_size_override("font_size", 12)
+    setup.add_child(who_label)
 
-    strategy_panel = _make_panel(PANEL_2)
-    strategy_panel.visible = false
-    main.add_child(strategy_panel)
-    var strategy_margin := _margin(18, 18, 14, 16)
-    strategy_panel.add_child(strategy_margin)
-    strategy_text = RichTextLabel.new()
-    strategy_text.bbcode_enabled = true
-    strategy_text.fit_content = true
-    strategy_text.custom_minimum_size.y = 150
-    strategy_text.add_theme_color_override("default_color", TEXT)
-    strategy_margin.add_child(strategy_text)
+    var setup_row := HBoxContainer.new()
+    setup_row.add_theme_constant_override("separation", 8)
+    setup.add_child(setup_row)
 
-func _build_setup_contents() -> void:
-    var margin := _margin(18, 18, 16, 18)
-    setup_panel.add_child(margin)
-    var v := VBoxContainer.new()
-    v.add_theme_constant_override("separation", 12)
-    margin.add_child(v)
+    start_option = OptionButton.new()
+    start_option.add_item("Computer")
+    start_option.add_item("You")
+    start_option.selected = 0
+    start_option.custom_minimum_size = Vector2(130, 42)
+    setup_row.add_child(start_option)
 
-    var heading := Label.new()
-    heading.text = "GAME SETUP"
-    heading.add_theme_color_override("font_color", GOLD)
-    heading.add_theme_font_size_override("font_size", 18)
-    v.add_child(heading)
+    new_game_button = _make_button("NEW GAME", false)
+    new_game_button.custom_minimum_size = Vector2(122, 42)
+    new_game_button.pressed.connect(_start_new_game)
+    setup_row.add_child(new_game_button)
 
-    var options := GridContainer.new()
-    options.columns = 4
-    options.add_theme_constant_override("h_separation", 14)
-    options.add_theme_constant_override("v_separation", 8)
-    v.add_child(options)
+    var rule_panel := PanelContainer.new()
+    rule_panel.add_theme_stylebox_override("panel", _style(TABLE_LIGHT, 12, 1, Color("#5a4337")))
+    main.add_child(rule_panel)
 
-    pile_count_option = _labeled_option(options, "Piles", ["2", "3", "4", "5"], 1)
-    pile_count_option.item_selected.connect(_on_pile_count_changed)
-    first_option = _labeled_option(options, "Who goes first?", ["You", "Computer", "Random"], 0)
-    first_option.item_selected.connect(func(_i: int): _update_setup_analysis())
-    ai_option = _labeled_option(options, "Computer", ["Perfect", "Practice", "Random"], 1)
-    rule_option = _labeled_option(options, "Rule", ["Last token wins", "Last token loses (video)"], 0)
-    rule_option.item_selected.connect(func(_i: int): _update_setup_analysis())
+    var rule_margin := _margin(14, 14, 10, 10)
+    rule_panel.add_child(rule_margin)
 
-    var pile_label := Label.new()
-    pile_label.text = "Starting pile sizes"
-    pile_label.add_theme_color_override("font_color", TEXT)
-    v.add_child(pile_label)
+    var rule_text := Label.new()
+    rule_text.text = "RULES  •  Remove one or more matches from ONE row only.  •  Taking the LAST match LOSES."
+    rule_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    rule_text.add_theme_color_override("font_color", PAPER)
+    rule_text.add_theme_font_size_override("font_size", 15)
+    rule_margin.add_child(rule_text)
 
-    setup_pile_row = HBoxContainer.new()
-    setup_pile_row.add_theme_constant_override("separation", 10)
-    v.add_child(setup_pile_row)
+    board_panel = PanelContainer.new()
+    board_panel.add_theme_stylebox_override("panel", _style(PAPER, 18, 2, Color("#c6b594")))
+    board_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    main.add_child(board_panel)
 
-    var utility := HBoxContainer.new()
-    utility.add_theme_constant_override("separation", 10)
-    v.add_child(utility)
+    var board_margin := _margin(20, 20, 18, 18)
+    board_panel.add_child(board_margin)
 
-    random_max_option = OptionButton.new()
-    for text in ["Random max: 7", "Random max: 10", "Random max: 15"]:
-        random_max_option.add_item(text)
-    utility.add_child(random_max_option)
+    var board_v := VBoxContainer.new()
+    board_v.add_theme_constant_override("separation", 12)
+    board_margin.add_child(board_v)
 
-    var random_button := _make_button("RANDOM SETUP", false)
-    random_button.pressed.connect(_randomize_setup)
-    utility.add_child(random_button)
+    var board_top := HBoxContainer.new()
+    board_top.add_theme_constant_override("separation", 12)
+    board_v.add_child(board_top)
 
-    var p1 := _make_button("3-4-5", false)
-    p1.pressed.connect(_apply_preset.bind([3, 4, 5]))
-    utility.add_child(p1)
-    var p2 := _make_button("2-5-7", false)
-    p2.pressed.connect(_apply_preset.bind([2, 5, 7]))
-    utility.add_child(p2)
-    var p3 := _make_button("7-3-3", false)
-    p3.pressed.connect(_apply_preset.bind([7, 3, 3]))
-    utility.add_child(p3)
-
-    setup_analysis = RichTextLabel.new()
-    setup_analysis.bbcode_enabled = true
-    setup_analysis.fit_content = true
-    setup_analysis.custom_minimum_size.y = 52
-    setup_analysis.add_theme_color_override("default_color", MUTED)
-    v.add_child(setup_analysis)
-
-    var start_button := _make_button("START GAME", true)
-    start_button.custom_minimum_size.y = 50
-    start_button.pressed.connect(_start_game)
-    v.add_child(start_button)
-
-func _build_game_contents() -> void:
-    var margin := _margin(18, 18, 16, 18)
-    game_panel.add_child(margin)
-    var v := VBoxContainer.new()
-    v.add_theme_constant_override("separation", 12)
-    margin.add_child(v)
-
-    var top := HBoxContainer.new()
-    top.add_theme_constant_override("separation", 12)
-    v.add_child(top)
+    var status_box := VBoxContainer.new()
+    status_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    status_box.add_theme_constant_override("separation", 2)
+    board_top.add_child(status_box)
 
     status_label = Label.new()
-    status_label.text = "Configure a game above"
-    status_label.add_theme_color_override("font_color", TEXT)
-    status_label.add_theme_font_size_override("font_size", 20)
-    status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    top.add_child(status_label)
+    status_label.text = "YOUR TURN"
+    status_label.add_theme_color_override("font_color", RED_DARK)
+    status_label.add_theme_font_size_override("font_size", 22)
+    status_box.add_child(status_label)
 
-    position_label = Label.new()
-    position_label.add_theme_color_override("font_color", GOLD)
-    position_label.add_theme_font_size_override("font_size", 20)
-    top.add_child(position_label)
+    substatus_label = Label.new()
+    substatus_label.text = "Press Start My Turn when you're ready."
+    substatus_label.add_theme_color_override("font_color", MUTED)
+    substatus_label.add_theme_font_size_override("font_size", 14)
+    substatus_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    status_box.add_child(substatus_label)
 
-    piles_grid = GridContainer.new()
-    piles_grid.columns = 3
-    piles_grid.add_theme_constant_override("h_separation", 12)
-    piles_grid.add_theme_constant_override("v_separation", 12)
-    v.add_child(piles_grid)
+    remaining_label = Label.new()
+    remaining_label.add_theme_color_override("font_color", MUTED)
+    remaining_label.add_theme_font_size_override("font_size", 14)
+    board_top.add_child(remaining_label)
 
-    var prompt := Label.new()
-    prompt.text = "Choose ONE pile, then choose how many tokens to remove:"
-    prompt.add_theme_color_override("font_color", MUTED)
-    v.add_child(prompt)
+    var divider := HSeparator.new()
+    divider.add_theme_color_override("separator", Color("#cdbf9f"))
+    board_v.add_child(divider)
 
-    removal_box = HBoxContainer.new()
-    removal_box.add_theme_constant_override("separation", 8)
-    v.add_child(removal_box)
+    rows_box = VBoxContainer.new()
+    rows_box.add_theme_constant_override("separation", 5)
+    rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    board_v.add_child(rows_box)
 
-    message_label = RichTextLabel.new()
-    message_label.bbcode_enabled = true
-    message_label.fit_content = true
-    message_label.custom_minimum_size.y = 64
-    message_label.add_theme_color_override("default_color", TEXT)
-    v.add_child(message_label)
+    var divider2 := HSeparator.new()
+    divider2.add_theme_color_override("separator", Color("#cdbf9f"))
+    board_v.add_child(divider2)
+
+    message_label = Label.new()
+    message_label.text = ""
+    message_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    message_label.add_theme_color_override("font_color", INK)
+    message_label.add_theme_font_size_override("font_size", 15)
+    message_label.custom_minimum_size.y = 42
+    board_v.add_child(message_label)
 
     var actions := HBoxContainer.new()
     actions.add_theme_constant_override("separation", 10)
-    v.add_child(actions)
+    actions.alignment = BoxContainer.ALIGNMENT_CENTER
+    board_v.add_child(actions)
 
-    hint_button = _make_button("HINT", false)
-    hint_button.pressed.connect(_show_hint)
-    actions.add_child(hint_button)
+    undo_button = _make_paper_button("UNDO MY PICKS")
+    undo_button.custom_minimum_size = Vector2(150, 48)
+    undo_button.disabled = true
+    undo_button.pressed.connect(_undo_player_turn)
+    actions.add_child(undo_button)
 
-    strategy_button = _make_button("SHOW 4-2-1 / BINARY", false)
-    strategy_button.pressed.connect(_toggle_strategy)
-    actions.add_child(strategy_button)
+    action_button = _make_action_button("START MY TURN")
+    action_button.custom_minimum_size = Vector2(220, 52)
+    action_button.pressed.connect(_on_action_button)
+    actions.add_child(action_button)
 
-    var back_button := _make_button("BACK TO SETUP", false)
-    back_button.pressed.connect(_back_to_setup)
-    actions.add_child(back_button)
+    var note := Label.new()
+    note.text = "Tip: once you remove the first match, the other rows lock. Keep taking from that same row, then end your turn."
+    note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    note.add_theme_color_override("font_color", Color("#bcae9b"))
+    note.add_theme_font_size_override("font_size", 13)
+    main.add_child(note)
 
-func _labeled_option(parent: GridContainer, label_text: String, items: Array[String], selected_index: int) -> OptionButton:
-    var label := Label.new()
-    label.text = label_text
-    label.add_theme_color_override("font_color", MUTED)
-    parent.add_child(label)
-    var option := OptionButton.new()
-    option.custom_minimum_size.x = 175
-    for item in items:
-        option.add_item(item)
-    option.selected = selected_index
-    parent.add_child(option)
-    return option
 
-func _rebuild_pile_inputs(count: int, values: Array[int] = []) -> void:
-    _clear_container(setup_pile_row)
-    pile_inputs.clear()
-    for i in range(count):
-        var col := VBoxContainer.new()
-        var label := Label.new()
-        label.text = "Pile %s" % _pile_name(i)
-        label.add_theme_color_override("font_color", MUTED)
-        col.add_child(label)
-        var spin := SpinBox.new()
-        spin.min_value = 0
-        spin.max_value = 15
-        spin.step = 1
-        spin.custom_minimum_size.x = 92
-        spin.value = values[i] if i < values.size() else mini(3 + i, 7)
-        spin.value_changed.connect(func(_value: float): _update_setup_analysis())
-        col.add_child(spin)
-        setup_pile_row.add_child(col)
-        pile_inputs.append(spin)
+func _start_new_game() -> void:
+    game_serial += 1
+    piles = CLASSIC_PILES.duplicate()
+    turn_start_piles = piles.duplicate()
+    selected_row = -1
+    removed_this_turn = 0
+    _build_match_rows()
 
-func _on_pile_count_changed(index: int) -> void:
-    var old := _read_piles()
-    _rebuild_pile_inputs(index + 2, old)
-    _update_setup_analysis()
-
-func _read_piles() -> Array[int]:
-    var result: Array[int] = []
-    for spin in pile_inputs:
-        result.append(int(round(spin.value)))
-    return result
-
-func _update_setup_analysis() -> void:
-    if setup_analysis == null or pile_inputs.is_empty():
-        return
-    var arr := _read_piles()
-    if _total(arr) == 0:
-        setup_analysis.text = "[color=#ff7d79]At least one pile must contain a token.[/color]"
-        return
-    var x := _nim_sum(arr)
-    var winner := "Player 1" if _position_is_winning(arr, rule_option.selected == 1) else "Player 2"
-    var special := ""
-    if rule_option.selected == 1:
-        special = " [color=#f0bf68](video / last-token-loses rule)[/color]"
-    setup_analysis.text = "Position [b]%s[/b] • Nim-sum [b]%s[/b] • Perfect play favors [b]%s[/b].%s" % [_position_string(arr), _binary(x, _bit_width(arr)), winner, special]
-
-func _randomize_setup() -> void:
-    var max_values := [7, 10, 15]
-    var max_n: int = max_values[random_max_option.selected]
-    var values: Array[int] = []
-    for _i in range(pile_inputs.size()):
-        values.append(rng.randi_range(1, max_n))
-    _rebuild_pile_inputs(pile_inputs.size(), values)
-    _update_setup_analysis()
-
-func _apply_preset(values: Array) -> void:
-    pile_count_option.selected = 1
-    var typed: Array[int] = []
-    for n in values:
-        typed.append(int(n))
-    _rebuild_pile_inputs(3, typed)
-    _update_setup_analysis()
-
-func _start_game() -> void:
-    piles = _read_piles()
-    if _total(piles) == 0:
-        piles[0] = 1
-    initial_piles = piles.duplicate()
-    selected_pile = -1
-    game_active = true
-    game_over = false
-    strategy_visible = false
-    strategy_panel.visible = false
-    strategy_button.text = "SHOW 4-2-1 / BINARY"
-    setup_panel.visible = false
-
-    var first := first_option.selected
-    if first == 2:
-        first = rng.randi_range(0, 1)
-    player_turn = first == 0
-
-    var x := _nim_sum(piles)
-    var theoretical := "Player 1" if _position_is_winning(piles, _is_misere()) else "Player 2"
-    message_label.text = "Starting position: [b]%s[/b]. Nim-sum: [b]%s[/b]. Under perfect play, [b]%s[/b] has the winning strategy." % [_position_string(piles), _binary(x, _bit_width(piles)), theoretical]
-    _render_game()
-    if not player_turn:
-        _computer_turn()
-
-func _render_game() -> void:
-    position_label.text = _position_string(piles)
-    if not game_active:
-        status_label.text = "Configure a game above"
-    elif game_over:
-        status_label.text = "Game over"
-    elif player_turn:
-        status_label.text = "YOUR TURN"
+    if start_option.selected == 0:
+        phase = Phase.COMPUTER
+        message_label.text = "The computer goes first. Watch the matches — it removes them one at a time."
+        _refresh_ui()
+        _computer_turn(game_serial)
     else:
-        status_label.text = "COMPUTER TURN"
+        phase = Phase.WAIT_PLAYER
+        message_label.text = "You go first. Press START MY TURN when you're ready to touch the matches."
+        _refresh_ui()
 
-    hint_button.disabled = not game_active or game_over or not player_turn
-    piles_grid.columns = mini(3, piles.size())
-    _clear_container(piles_grid)
+
+func _build_match_rows() -> void:
+    _clear_container(rows_box)
+    match_rows.clear()
+    count_labels.clear()
+
+    for row_index in range(piles.size()):
+        var row := HBoxContainer.new()
+        row.add_theme_constant_override("separation", 8)
+        row.custom_minimum_size.y = 108
+        row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        rows_box.add_child(row)
+
+        var label_box := VBoxContainer.new()
+        label_box.custom_minimum_size.x = 78
+        label_box.alignment = BoxContainer.ALIGNMENT_CENTER
+        row.add_child(label_box)
+
+        var row_label := Label.new()
+        row_label.text = "ROW %d" % (row_index + 1)
+        row_label.add_theme_color_override("font_color", MUTED)
+        row_label.add_theme_font_size_override("font_size", 12)
+        label_box.add_child(row_label)
+
+        var count := Label.new()
+        count.text = str(piles[row_index])
+        count.add_theme_color_override("font_color", INK)
+        count.add_theme_font_size_override("font_size", 22)
+        label_box.add_child(count)
+        count_labels.append(count)
+
+        var matches := HBoxContainer.new()
+        matches.alignment = BoxContainer.ALIGNMENT_CENTER
+        matches.add_theme_constant_override("separation", 2)
+        matches.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        row.add_child(matches)
+        match_rows.append(matches)
+
+        for match_index in range(piles[row_index]):
+            var match := MatchstickButton.new()
+            match.row_index = row_index
+            match.match_index = match_index
+            match.pressed.connect(_on_match_pressed.bind(row_index, match))
+            matches.add_child(match)
+
+    _refresh_match_interaction()
+
+
+func _on_action_button() -> void:
+    match phase:
+        Phase.WAIT_PLAYER:
+            _begin_player_turn()
+        Phase.PLAYER:
+            _finish_player_turn()
+        Phase.GAME_OVER:
+            _start_new_game()
+        _:
+            pass
+
+
+func _begin_player_turn() -> void:
+    if phase != Phase.WAIT_PLAYER:
+        return
+    phase = Phase.PLAYER
+    selected_row = -1
+    removed_this_turn = 0
+    turn_start_piles = piles.duplicate()
+    message_label.text = "Click a match to remove it. You may keep removing matches from that same row."
+    _refresh_ui()
+
+
+func _on_match_pressed(row_index: int, match: MatchstickButton) -> void:
+    if phase != Phase.PLAYER:
+        return
+    if row_index < 0 or row_index >= piles.size() or piles[row_index] <= 0:
+        return
+    if selected_row != -1 and selected_row != row_index:
+        return
+
+    if selected_row == -1:
+        selected_row = row_index
+
+    piles[row_index] -= 1
+    removed_this_turn += 1
+    _animate_match_removal(match)
+    message_label.text = "You removed %d match%s from Row %d. Keep clicking this row or press END MY TURN." % [removed_this_turn, "" if removed_this_turn == 1 else "es", row_index + 1]
+
+    if _total_matches() == 0:
+        _finish_game(false, "You took the final match. Under the video rule, the player who takes the last match loses.")
+        return
+
+    _refresh_ui()
+
+
+func _finish_player_turn() -> void:
+    if phase != Phase.PLAYER or removed_this_turn <= 0:
+        return
+    phase = Phase.COMPUTER
+    message_label.text = "You removed %d match%s from Row %d. Now watch the computer's turn." % [removed_this_turn, "" if removed_this_turn == 1 else "es", selected_row + 1]
+    _refresh_ui()
+    _computer_turn(game_serial)
+
+
+func _undo_player_turn() -> void:
+    if phase != Phase.PLAYER or removed_this_turn <= 0:
+        return
+    piles = turn_start_piles.duplicate()
+    selected_row = -1
+    removed_this_turn = 0
+    _build_match_rows()
+    message_label.text = "Your picks were restored. Choose a row again."
+    _refresh_ui()
+
+
+func _computer_turn(serial: int) -> void:
+    if serial != game_serial:
+        return
+    phase = Phase.COMPUTER
+    selected_row = -1
+    removed_this_turn = 0
+    _refresh_ui()
+
+    await get_tree().create_timer(0.7).timeout
+    if serial != game_serial or phase != Phase.COMPUTER:
+        return
+
+    var move := _choose_misere_move()
+    var row_index: int = int(move.get("row", -1))
+    var amount: int = int(move.get("amount", 0))
+    if row_index < 0 or amount <= 0:
+        return
+
+    status_label.text = "COMPUTER'S TURN"
+    substatus_label.text = "Computer chose Row %d…" % (row_index + 1)
+
+    for step in range(amount):
+        if serial != game_serial or phase != Phase.COMPUTER:
+            return
+        if piles[row_index] <= 0:
+            break
+
+        piles[row_index] -= 1
+        _remove_one_computer_match(row_index)
+        message_label.text = "Computer removes match %d of %d from Row %d." % [step + 1, amount, row_index + 1]
+        _refresh_counts_only()
+
+        if _total_matches() == 0:
+            await get_tree().create_timer(0.3).timeout
+            if serial == game_serial:
+                _finish_game(true, "The computer took the final match, so the computer loses. You win!")
+            return
+
+        if step < amount - 1:
+            await get_tree().create_timer(COMPUTER_MATCH_DELAY).timeout
+
+    if serial != game_serial:
+        return
+
+    phase = Phase.WAIT_PLAYER
+    message_label.text = "Computer removed %d match%s from Row %d. Press START MY TURN when you're ready." % [amount, "" if amount == 1 else "es", row_index + 1]
+    _refresh_ui()
+
+
+func _choose_misere_move() -> Dictionary:
+    var big_count := 0
+    var big_index := -1
+    var ones_count := 0
 
     for i in range(piles.size()):
-        var b := _make_button("", false)
-        b.custom_minimum_size = Vector2(0, 118)
-        b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-        var token_line := ""
-        for _j in range(piles[i]):
-            token_line += "● "
-        if token_line.is_empty():
-            token_line = "—"
-        b.text = "Pile %s    %d\n%s" % [_pile_name(i), piles[i], token_line]
-        b.disabled = not game_active or game_over or not player_turn or piles[i] == 0
-        if i == selected_pile:
-            b.add_theme_stylebox_override("normal", _panel_style(Color("#203b61"), 10, ACCENT))
-        b.pressed.connect(_select_pile.bind(i))
-        piles_grid.add_child(b)
+        if piles[i] > 1:
+            big_count += 1
+            big_index = i
+        elif piles[i] == 1:
+            ones_count += 1
 
-    _render_removal_buttons()
-    _refresh_strategy()
+    # Endgame: every remaining heap is a singleton.
+    if big_count == 0:
+        for i in range(piles.size()):
+            if piles[i] == 1:
+                return {"row": i, "amount": 1}
 
-func _select_pile(index: int) -> void:
-    if not game_active or game_over or not player_turn or piles[index] <= 0:
-        return
-    selected_pile = index
-    _render_game()
+    # Exactly one heap is larger than one. Leave an odd number of singletons.
+    if big_count == 1:
+        if ones_count % 2 == 0:
+            return {"row": big_index, "amount": piles[big_index] - 1}
+        return {"row": big_index, "amount": piles[big_index]}
 
-func _render_removal_buttons() -> void:
-    _clear_container(removal_box)
-    if selected_pile < 0 or selected_pile >= piles.size() or not player_turn or game_over:
-        return
-    for amount in range(1, piles[selected_pile] + 1):
-        var b := _make_button(str(amount), false)
-        b.custom_minimum_size.x = 48
-        b.tooltip_text = "Remove %d from Pile %s" % [amount, _pile_name(selected_pile)]
-        b.pressed.connect(_player_remove.bind(amount))
-        removal_box.add_child(b)
+    # With two or more large heaps, misere Nim uses the normal XOR move.
+    var x := _nim_sum()
+    if x != 0:
+        for i in range(piles.size()):
+            var target := piles[i] ^ x
+            if target < piles[i]:
+                return {"row": i, "amount": piles[i] - target}
 
-func _player_remove(amount: int) -> void:
-    if selected_pile < 0 or amount < 1 or amount > piles[selected_pile]:
-        return
-    var i := selected_pile
-    var before := piles[i]
-    piles[i] -= amount
-    selected_pile = -1
-    if _check_game_end(true):
-        return
-    var x := _nim_sum(piles)
-    var zero_text := "[color=#63d69a]ZERO[/color]" if x == 0 else "[color=#ff7d79]non-zero[/color]"
-    message_label.text = "You changed Pile %s: [b]%d → %d[/b]. Nim-sum: [b]%s[/b] (%s)." % [_pile_name(i), before, piles[i], _binary(x, _bit_width(piles)), zero_text]
-    player_turn = false
-    _render_game()
-    _computer_turn()
-
-func _computer_turn() -> void:
-    await get_tree().create_timer(0.55).timeout
-    if game_over or not game_active:
-        return
-    var move := _choose_ai_move()
-    if move.is_empty():
-        return
-    var i: int = move[0]
-    var target: int = move[1]
-    var before := piles[i]
-    piles[i] = target
-    if _check_game_end(false):
-        return
-    var x := _nim_sum(piles)
-    message_label.text = "Computer changed Pile %s: [b]%d → %d[/b]. Nim-sum: [b]%s[/b]. Your turn." % [_pile_name(i), before, target, _binary(x, _bit_width(piles))]
-    player_turn = true
-    _render_game()
-
-func _choose_ai_move() -> Array[int]:
-    var best := _winning_move(piles, _is_misere())
-    match ai_option.selected:
-        0:
-            return best if not best.is_empty() else _random_move(piles)
-        1:
-            if not best.is_empty() and rng.randf() < 0.72:
-                return best
-            return _random_move(piles)
-        _:
-            return _random_move(piles)
-
-func _winning_move(arr: Array[int], misere: bool) -> Array[int]:
-    if misere:
-        var large: Array[int] = []
-        var ones := 0
-        for i in range(arr.size()):
-            if arr[i] > 1:
-                large.append(i)
-            elif arr[i] == 1:
-                ones += 1
-        if large.is_empty():
-            if ones > 0 and ones % 2 == 0:
-                for i in range(arr.size()):
-                    if arr[i] == 1:
-                        return [i, 0]
-            return []
-        if large.size() == 1:
-            var i := large[0]
-            var target := 1 if ones % 2 == 0 else 0
-            if target < arr[i]:
-                return [i, target]
-
-    var x := _nim_sum(arr)
-    if x == 0:
-        return []
-    for i in range(arr.size()):
-        var target := arr[i] ^ x
-        if target < arr[i]:
-            return [i, target]
-    return []
-
-func _random_move(arr: Array[int]) -> Array[int]:
+    # A zero Nim-sum is a losing position under perfect play. Make a varied legal move.
     var available: Array[int] = []
-    for i in range(arr.size()):
-        if arr[i] > 0:
+    for i in range(piles.size()):
+        if piles[i] > 0:
             available.append(i)
     if available.is_empty():
-        return []
-    var index := available[rng.randi_range(0, available.size() - 1)]
-    var take := rng.randi_range(1, arr[index])
-    return [index, arr[index] - take]
+        return {"row": -1, "amount": 0}
+    var chosen_row: int = available[rng.randi_range(0, available.size() - 1)]
+    return {"row": chosen_row, "amount": rng.randi_range(1, piles[chosen_row])}
 
-func _check_game_end(mover_is_player: bool) -> bool:
-    if _total(piles) != 0:
-        return false
-    game_over = true
-    var player_wins: bool
-    if _is_misere():
-        player_wins = not mover_is_player
-    else:
-        player_wins = mover_is_player
-    if player_wins:
-        message_label.text = "[color=#63d69a][b]YOU WIN![/b][/color] " + ("The computer was forced to take the last token." if _is_misere() else "You took the last token.")
-    else:
-        message_label.text = "[color=#ff7d79][b]COMPUTER WINS.[/b][/color] " + ("You took the last token, so you lose in video mode." if _is_misere() else "The computer took the last token.")
-    _render_game()
-    return true
 
-func _show_hint() -> void:
-    if not game_active or game_over or not player_turn:
-        return
-    var move := _winning_move(piles, _is_misere())
-    if move.is_empty():
-        message_label.text = "[color=#f0bf68][b]HINT:[/b][/color] This is a losing position against perfect play. There is no guaranteed winning move; make a legal move and hope for a mistake."
-        return
-    var i: int = move[0]
-    var target: int = move[1]
-    message_label.text = "[color=#f0bf68][b]HINT:[/b][/color] Remove [b]%d[/b] from Pile %s (%d → %d)." % [piles[i] - target, _pile_name(i), piles[i], target]
-
-func _toggle_strategy() -> void:
-    strategy_visible = not strategy_visible
-    strategy_panel.visible = strategy_visible
-    strategy_button.text = "HIDE 4-2-1 / BINARY" if strategy_visible else "SHOW 4-2-1 / BINARY"
-    _refresh_strategy()
-
-func _refresh_strategy() -> void:
-    if not strategy_visible or strategy_text == null:
-        return
-    var width := _bit_width(piles)
-    var lines: Array[String] = []
-    lines.append("[color=#f0bf68][b]BINARY / PAIRING REVEAL[/b][/color]")
-    lines.append("Each column is a power of 2. In standard Nim, you want to hand your opponent a Nim-sum of zero.")
-    lines.append("")
-    var header := "Pile     "
-    for bit in range(width - 1, -1, -1):
-        header += "%4d" % (1 << bit)
-    header += "      Binary"
-    lines.append("[code]%s[/code]" % header)
-    for i in range(piles.size()):
-        var b := _binary(piles[i], width)
-        var row := "%s = %-2d  " % [_pile_name(i), piles[i]]
-        for ch in b:
-            row += "%4s" % ch
-        row += "      %s" % b
-        lines.append("[code]%s[/code]" % row)
-    var x := _nim_sum(piles)
-    lines.append("[code]Nim-sum: %s[/code]" % _binary(x, width))
-    if x == 0:
-        lines.append("[color=#63d69a][b]ZERO POSITION:[/b][/color] every binary column has an even number of 1s.")
-    else:
-        lines.append("[color=#ff7d79][b]NON-ZERO POSITION:[/b][/color] look for a move that restores zero.")
-    if _is_misere():
-        lines.append("")
-        lines.append("[color=#f0bf68][b]Video-rule exception:[/b][/color] when every remaining pile is 0 or 1, parity replaces the ordinary zero rule because the player taking the final token loses.")
-    strategy_text.text = "\n".join(lines)
-
-func _back_to_setup() -> void:
-    game_active = false
-    game_over = false
-    selected_pile = -1
-    setup_panel.visible = true
-    strategy_visible = false
-    strategy_panel.visible = false
-    piles = initial_piles.duplicate()
-    pile_count_option.selected = initial_piles.size() - 2
-    _rebuild_pile_inputs(initial_piles.size(), initial_piles)
-    _update_setup_analysis()
-    message_label.text = "Adjust the setup and start another game."
-    _render_game()
-
-func _position_is_winning(arr: Array[int], misere: bool) -> bool:
-    return not _winning_move(arr, misere).is_empty()
-
-func _is_misere() -> bool:
-    return rule_option.selected == 1
-
-func _nim_sum(arr: Array[int]) -> int:
+func _nim_sum() -> int:
     var result := 0
-    for n in arr:
-        result ^= n
+    for n in piles:
+        result = result ^ n
     return result
 
-func _total(arr: Array[int]) -> int:
-    var result := 0
-    for n in arr:
-        result += n
-    return result
 
-func _bit_width(arr: Array[int]) -> int:
-    var max_n := 1
-    for n in arr:
-        max_n = maxi(max_n, n)
-    var width := 1
-    while (1 << width) <= max_n:
-        width += 1
-    return maxi(3, width)
+func _animate_match_removal(match: MatchstickButton) -> void:
+    if not is_instance_valid(match):
+        return
+    match.disabled = true
+    var tween := create_tween()
+    tween.set_parallel(true)
+    tween.tween_property(match, "modulate:a", 0.0, 0.18)
+    tween.tween_property(match, "position:y", match.position.y + 16.0, 0.18)
+    tween.set_parallel(false)
+    tween.tween_callback(match.queue_free)
 
-func _binary(value: int, width: int) -> String:
-    var out := ""
-    for bit in range(width - 1, -1, -1):
-        out += "1" if (value & (1 << bit)) != 0 else "0"
-    return out
 
-func _position_string(arr: Array[int]) -> String:
-    var parts := PackedStringArray()
-    for n in arr:
-        parts.append(str(n))
-    return " - ".join(parts)
+func _remove_one_computer_match(row_index: int) -> void:
+    if row_index < 0 or row_index >= match_rows.size():
+        return
+    var row := match_rows[row_index]
+    var children := row.get_children()
+    for i in range(children.size() - 1, -1, -1):
+        var child := children[i]
+        if child is MatchstickButton and not child.is_queued_for_deletion():
+            _animate_match_removal(child)
+            return
 
-func _pile_name(index: int) -> String:
-    var names := ["A", "B", "C", "D", "E"]
-    return names[clampi(index, 0, names.size() - 1)]
 
-func _clear_container(container: Container) -> void:
-    for child in container.get_children():
-        container.remove_child(child)
-        child.queue_free()
+func _refresh_ui() -> void:
+    _refresh_counts_only()
+    _refresh_match_interaction()
 
-func _margin(left: int, right: int, top: int, bottom: int) -> MarginContainer:
-    var m := MarginContainer.new()
-    m.add_theme_constant_override("margin_left", left)
-    m.add_theme_constant_override("margin_right", right)
-    m.add_theme_constant_override("margin_top", top)
-    m.add_theme_constant_override("margin_bottom", bottom)
-    return m
+    match phase:
+        Phase.WAIT_PLAYER:
+            status_label.text = "READY FOR YOUR TURN"
+            status_label.add_theme_color_override("font_color", GREEN)
+            substatus_label.text = "The board is paused until you press START MY TURN."
+            action_button.text = "START MY TURN"
+            action_button.disabled = false
+            undo_button.disabled = true
+        Phase.PLAYER:
+            status_label.text = "YOUR TURN"
+            status_label.add_theme_color_override("font_color", RED_DARK)
+            if selected_row == -1:
+                substatus_label.text = "Choose one row by clicking any match."
+            else:
+                substatus_label.text = "Row %d is locked in. Remove more from this row or end your turn." % (selected_row + 1)
+            action_button.text = "END MY TURN →"
+            action_button.disabled = removed_this_turn == 0
+            undo_button.disabled = removed_this_turn == 0
+        Phase.COMPUTER:
+            status_label.text = "COMPUTER'S TURN"
+            status_label.add_theme_color_override("font_color", RED_DARK)
+            substatus_label.text = "Watch closely — the computer removes one match every 0.5 seconds."
+            action_button.text = "COMPUTER'S TURN…"
+            action_button.disabled = true
+            undo_button.disabled = true
+        Phase.GAME_OVER:
+            status_label.text = "GAME OVER"
+            status_label.add_theme_color_override("font_color", RED_DARK)
+            substatus_label.text = "Start another classic 1–3–5–7 game whenever you're ready."
+            action_button.text = "PLAY AGAIN"
+            action_button.disabled = false
+            undo_button.disabled = true
 
-func _make_panel(color: Color) -> PanelContainer:
-    var p := PanelContainer.new()
-    p.add_theme_stylebox_override("panel", _panel_style(color, 16))
-    return p
 
-func _panel_style(color: Color, radius: int, border_color: Color = Color.TRANSPARENT) -> StyleBoxFlat:
+func _refresh_counts_only() -> void:
+    remaining_label.text = "%d MATCH%s LEFT" % [_total_matches(), "" if _total_matches() == 1 else "ES"]
+    for i in range(mini(count_labels.size(), piles.size())):
+        count_labels[i].text = str(piles[i])
+
+
+func _refresh_match_interaction() -> void:
+    for row_index in range(match_rows.size()):
+        var row_active := phase == Phase.PLAYER and (selected_row == -1 or selected_row == row_index)
+        var row := match_rows[row_index]
+        row.modulate = Color.WHITE if row_active or phase != Phase.PLAYER else Color(0.72, 0.68, 0.61, 0.55)
+        for child in row.get_children():
+            if child is MatchstickButton:
+                child.set_active(row_active)
+
+
+func _finish_game(player_won: bool, explanation: String) -> void:
+    phase = Phase.GAME_OVER
+    game_serial += 1
+    selected_row = -1
+    removed_this_turn = 0
+    if player_won:
+        message_label.text = "YOU WIN!  " + explanation
+    else:
+        message_label.text = "COMPUTER WINS.  " + explanation
+    _refresh_ui()
+
+
+func _total_matches() -> int:
+    var total := 0
+    for n in piles:
+        total += n
+    return total
+
+
+func _make_button(text_value: String, primary: bool) -> Button:
+    var button := Button.new()
+    button.text = text_value
+    button.add_theme_font_size_override("font_size", 14)
+    button.add_theme_color_override("font_color", PAPER if primary else INK)
+    button.add_theme_color_override("font_hover_color", PAPER if primary else INK)
+    button.add_theme_stylebox_override("normal", _style(RED if primary else PAPER_2, 9, 1, RED_DARK if primary else Color("#bba984")))
+    button.add_theme_stylebox_override("hover", _style(RED_DARK if primary else Color("#ddcfb1"), 9, 1, RED_DARK if primary else Color("#a99570")))
+    button.add_theme_stylebox_override("pressed", _style(Color("#57201c") if primary else Color("#d2c19f"), 9, 1, RED_DARK if primary else Color("#9f8a65")))
+    return button
+
+
+func _make_paper_button(text_value: String) -> Button:
+    return _make_button(text_value, false)
+
+
+func _make_action_button(text_value: String) -> Button:
+    return _make_button(text_value, true)
+
+
+func _style(bg: Color, radius: int, border: int = 0, border_color: Color = Color.TRANSPARENT) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
-    style.bg_color = color
+    style.bg_color = bg
     style.corner_radius_top_left = radius
     style.corner_radius_top_right = radius
     style.corner_radius_bottom_left = radius
     style.corner_radius_bottom_right = radius
-    if border_color.a > 0.0:
-        style.border_width_left = 1
-        style.border_width_right = 1
-        style.border_width_top = 1
-        style.border_width_bottom = 1
-        style.border_color = border_color
+    style.border_width_left = border
+    style.border_width_top = border
+    style.border_width_right = border
+    style.border_width_bottom = border
+    style.border_color = border_color
+    style.content_margin_left = 12
+    style.content_margin_right = 12
+    style.content_margin_top = 8
+    style.content_margin_bottom = 8
     return style
 
-func _make_button(text_value: String, primary: bool) -> Button:
-    var b := Button.new()
-    b.text = text_value
-    b.custom_minimum_size.y = 42
-    b.add_theme_font_size_override("font_size", 15)
-    b.add_theme_color_override("font_color", TEXT)
-    if primary:
-        b.add_theme_stylebox_override("normal", _panel_style(ACCENT_DARK, 10))
-        b.add_theme_stylebox_override("hover", _panel_style(ACCENT, 10))
-        b.add_theme_stylebox_override("pressed", _panel_style(Color("#244b7d"), 10))
-    else:
-        b.add_theme_stylebox_override("normal", _panel_style(PANEL_2, 10, Color("#334868")))
-        b.add_theme_stylebox_override("hover", _panel_style(Color("#233653"), 10, ACCENT))
-        b.add_theme_stylebox_override("pressed", _panel_style(Color("#1b2a43"), 10))
-    return b
+
+func _margin(left: int, right: int, top: int, bottom: int) -> MarginContainer:
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", left)
+    margin.add_theme_constant_override("margin_right", right)
+    margin.add_theme_constant_override("margin_top", top)
+    margin.add_theme_constant_override("margin_bottom", bottom)
+    return margin
+
+
+func _clear_container(container: Node) -> void:
+    if container == null:
+        return
+    for child in container.get_children():
+        child.queue_free()
