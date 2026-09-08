@@ -47,6 +47,7 @@ class MatchstickButton:
         mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if value else Control.CURSOR_ARROW
         queue_redraw()
 
+
 var rng := RandomNumberGenerator.new()
 var phase: Phase = Phase.PLAYER
 var piles: Array[int] = [1, 3, 5, 7]
@@ -67,10 +68,25 @@ var message_label: Label
 var action_button: Button
 var undo_button: Button
 
+var match_sound_player: AudioStreamPlayer
+var result_sound_player: AudioStreamPlayer
+var match_sound: AudioStreamWAV
+var win_sound: AudioStreamWAV
+var lose_sound: AudioStreamWAV
+
+var result_overlay: Control
+var result_panel: PanelContainer
+var result_title: Label
+var result_subtitle: Label
+
+
 func _ready() -> void:
     rng.randomize()
     _build_ui()
+    _build_audio()
+    _build_result_overlay()
     _start_new_game()
+
 
 func _build_ui() -> void:
     var bg := ColorRect.new()
@@ -217,13 +233,158 @@ func _build_ui() -> void:
     action_button.pressed.connect(_on_action_button)
     actions.add_child(action_button)
 
+
+func _build_audio() -> void:
+    match_sound_player = AudioStreamPlayer.new()
+    match_sound_player.volume_db = -5.0
+    add_child(match_sound_player)
+
+    result_sound_player = AudioStreamPlayer.new()
+    result_sound_player.volume_db = -2.0
+    add_child(result_sound_player)
+
+    match_sound = _make_tone_sequence([920.0], 0.055, 0.28)
+    win_sound = _make_tone_sequence([523.25, 659.25, 783.99, 1046.50], 0.12, 0.32)
+    lose_sound = _make_tone_sequence([392.0, 311.13, 246.94, 196.0], 0.15, 0.30)
+
+
+func _make_tone_sequence(frequencies: Array, note_length: float, volume: float) -> AudioStreamWAV:
+    var sample_rate := 22050
+    var samples_per_note := maxi(1, int(float(sample_rate) * note_length))
+    var total_samples := samples_per_note * frequencies.size()
+    var bytes := PackedByteArray()
+    bytes.resize(total_samples * 2)
+
+    for note_index in range(frequencies.size()):
+        var frequency := float(frequencies[note_index])
+        for sample_index in range(samples_per_note):
+            var t := float(sample_index) / float(sample_rate)
+            var progress := float(sample_index) / float(maxi(1, samples_per_note - 1))
+            var envelope := sin(PI * progress)
+            var sample := sin(TAU * frequency * t) * envelope * volume
+            var pcm_value := int(clampf(sample, -1.0, 1.0) * 32767.0)
+            var byte_offset := (note_index * samples_per_note + sample_index) * 2
+            bytes.encode_s16(byte_offset, pcm_value)
+
+    var stream := AudioStreamWAV.new()
+    stream.format = AudioStreamWAV.FORMAT_16_BITS
+    stream.mix_rate = sample_rate
+    stream.stereo = false
+    stream.data = bytes
+    return stream
+
+
+func _play_match_sound() -> void:
+    if match_sound_player == null or match_sound == null:
+        return
+    match_sound_player.stream = match_sound
+    match_sound_player.pitch_scale = rng.randf_range(0.96, 1.04)
+    match_sound_player.play()
+
+
+func _play_result_sound(player_won: bool) -> void:
+    if result_sound_player == null:
+        return
+    result_sound_player.stream = win_sound if player_won else lose_sound
+    result_sound_player.pitch_scale = 1.0
+    result_sound_player.play()
+
+
+func _build_result_overlay() -> void:
+    result_overlay = Control.new()
+    result_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    result_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    result_overlay.visible = false
+    result_overlay.z_index = 100
+    add_child(result_overlay)
+
+    var dim := ColorRect.new()
+    dim.color = Color(0.05, 0.035, 0.025, 0.72)
+    dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    result_overlay.add_child(dim)
+
+    var center := CenterContainer.new()
+    center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    result_overlay.add_child(center)
+
+    result_panel = PanelContainer.new()
+    result_panel.custom_minimum_size = Vector2(520, 190)
+    result_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    center.add_child(result_panel)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 32)
+    margin.add_theme_constant_override("margin_right", 32)
+    margin.add_theme_constant_override("margin_top", 24)
+    margin.add_theme_constant_override("margin_bottom", 24)
+    margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    result_panel.add_child(margin)
+
+    var result_box := VBoxContainer.new()
+    result_box.alignment = BoxContainer.ALIGNMENT_CENTER
+    result_box.add_theme_constant_override("separation", 8)
+    result_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    margin.add_child(result_box)
+
+    result_title = Label.new()
+    result_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    result_title.add_theme_font_size_override("font_size", 64)
+    result_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    result_box.add_child(result_title)
+
+    result_subtitle = Label.new()
+    result_subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    result_subtitle.add_theme_color_override("font_color", PAPER)
+    result_subtitle.add_theme_font_size_override("font_size", 18)
+    result_subtitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    result_box.add_child(result_subtitle)
+
+    var again_hint := Label.new()
+    again_hint.text = "Press PLAY AGAIN below for a new random board"
+    again_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    again_hint.add_theme_color_override("font_color", Color("#d6c9b8"))
+    again_hint.add_theme_font_size_override("font_size", 12)
+    again_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    result_box.add_child(again_hint)
+
+
+func _show_result_overlay(player_won: bool, explanation: String) -> void:
+    if result_overlay == null:
+        return
+
+    result_title.text = "YOU WIN!" if player_won else "YOU LOSE"
+    result_title.add_theme_color_override("font_color", Color("#86c995") if player_won else Color("#e37a70"))
+    result_subtitle.text = explanation
+    result_panel.add_theme_stylebox_override(
+        "panel",
+        _style(Color("#241813"), 18, 3, Color("#6f9f78") if player_won else Color("#a84b43"))
+    )
+
+    result_overlay.modulate.a = 0.0
+    result_overlay.visible = true
+    var tween := create_tween()
+    tween.tween_property(result_overlay, "modulate:a", 1.0, 0.22)
+
+
+func _hide_result_overlay() -> void:
+    if result_overlay != null:
+        result_overlay.visible = false
+        result_overlay.modulate.a = 1.0
+    if result_sound_player != null:
+        result_sound_player.stop()
+
+
 func _randomize_piles() -> Array[int]:
     var result: Array[int] = []
     for _i in range(ROW_COUNT):
         result.append(rng.randi_range(MIN_MATCHES, MAX_MATCHES))
     return result
 
+
 func _start_new_game() -> void:
+    _hide_result_overlay()
     game_serial += 1
     piles = _randomize_piles()
     selected_row = -1
@@ -237,6 +398,7 @@ func _start_new_game() -> void:
     else:
         _begin_player_turn("New board: %s. You go first." % _position_string())
 
+
 func _begin_player_turn(message: String = "Your turn. Remove matches from one row.") -> void:
     phase = Phase.PLAYER
     selected_row = -1
@@ -244,6 +406,7 @@ func _begin_player_turn(message: String = "Your turn. Remove matches from one ro
     turn_start_piles = piles.duplicate()
     message_label.text = message
     _refresh_ui()
+
 
 func _build_match_rows() -> void:
     _clear_container(rows_box)
@@ -255,21 +418,25 @@ func _build_match_rows() -> void:
         row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         row.size_flags_vertical = Control.SIZE_EXPAND_FILL
         rows_box.add_child(row)
+
         var label_box := VBoxContainer.new()
         label_box.custom_minimum_size.x = 58
         label_box.alignment = BoxContainer.ALIGNMENT_CENTER
         row.add_child(label_box)
+
         var row_label := Label.new()
         row_label.text = "ROW %d" % (row_index + 1)
         row_label.add_theme_color_override("font_color", MUTED)
         row_label.add_theme_font_size_override("font_size", 9)
         label_box.add_child(row_label)
+
         var count_label := Label.new()
         count_label.text = str(piles[row_index])
         count_label.add_theme_color_override("font_color", INK)
         count_label.add_theme_font_size_override("font_size", 16)
         label_box.add_child(count_label)
         count_labels.append(count_label)
+
         var sticks := HBoxContainer.new()
         sticks.alignment = BoxContainer.ALIGNMENT_CENTER
         sticks.add_theme_constant_override("separation", 3)
@@ -277,12 +444,15 @@ func _build_match_rows() -> void:
         sticks.size_flags_vertical = Control.SIZE_EXPAND_FILL
         row.add_child(sticks)
         match_rows.append(sticks)
+
         for _index in range(piles[row_index]):
             var stick_button := MatchstickButton.new()
             stick_button.row_index = row_index
             stick_button.pressed.connect(_on_match_pressed.bind(row_index, stick_button))
             sticks.add_child(stick_button)
+
     _refresh_match_interaction()
+
 
 func _on_match_pressed(row_index: int, stick_button: MatchstickButton) -> void:
     if phase != Phase.PLAYER:
@@ -291,20 +461,26 @@ func _on_match_pressed(row_index: int, stick_button: MatchstickButton) -> void:
         return
     if selected_row == -1:
         selected_row = row_index
+
     piles[row_index] -= 1
     removed_this_turn += 1
+    _play_match_sound()
     _animate_removal(stick_button)
+
     if _total_matches() == 0:
         _finish_game(true, "You took the final match!")
         return
+
     message_label.text = "You removed %d match%s from Row %d." % [removed_this_turn, "" if removed_this_turn == 1 else "es", row_index + 1]
     _refresh_ui()
+
 
 func _on_action_button() -> void:
     if phase == Phase.PLAYER:
         _finish_player_turn()
     elif phase == Phase.GAME_OVER:
         _start_new_game()
+
 
 func _finish_player_turn() -> void:
     if phase != Phase.PLAYER or removed_this_turn <= 0:
@@ -313,6 +489,7 @@ func _finish_player_turn() -> void:
     message_label.text = "Your turn is complete. Watch the computer."
     _refresh_ui()
     _computer_turn(game_serial)
+
 
 func _undo_player_turn() -> void:
     if phase != Phase.PLAYER or removed_this_turn <= 0:
@@ -324,35 +501,45 @@ func _undo_player_turn() -> void:
     message_label.text = "Your picks were restored."
     _refresh_ui()
 
+
 func _computer_turn(serial: int) -> void:
     if serial != game_serial:
         return
+
     phase = Phase.COMPUTER
     _refresh_ui()
     await get_tree().create_timer(0.55).timeout
     if serial != game_serial:
         return
+
     var move := _choose_normal_move()
     var row_index: int = int(move.get("row", -1))
     var amount: int = int(move.get("amount", 0))
     if row_index < 0 or amount <= 0:
         return
+
     for step in range(amount):
         if serial != game_serial or phase != Phase.COMPUTER:
             return
+
         piles[row_index] -= 1
+        _play_match_sound()
         _remove_one_computer_match(row_index)
         message_label.text = "Computer removes match %d of %d from Row %d." % [step + 1, amount, row_index + 1]
         _refresh_counts_only()
+
         if _total_matches() == 0:
             await get_tree().create_timer(0.2).timeout
             if serial == game_serial:
                 _finish_game(false, "The computer took the final match.")
             return
+
         if step < amount - 1:
             await get_tree().create_timer(COMPUTER_MATCH_DELAY).timeout
+
     if serial == game_serial:
         _begin_player_turn("Computer removed %d match%s from Row %d. Your turn." % [amount, "" if amount == 1 else "es", row_index + 1])
+
 
 func _choose_normal_move() -> Dictionary:
     var x := _nim_sum()
@@ -361,20 +548,25 @@ func _choose_normal_move() -> Dictionary:
             var target := piles[i] ^ x
             if target < piles[i]:
                 return {"row": i, "amount": piles[i] - target}
+
     var available: Array[int] = []
     for i in range(piles.size()):
         if piles[i] > 0:
             available.append(i)
+
     if available.is_empty():
         return {"row": -1, "amount": 0}
+
     var chosen := available[rng.randi_range(0, available.size() - 1)]
     return {"row": chosen, "amount": rng.randi_range(1, piles[chosen])}
+
 
 func _nim_sum() -> int:
     var result := 0
     for value in piles:
         result = result ^ value
     return result
+
 
 func _animate_removal(stick_button: MatchstickButton) -> void:
     stick_button.disabled = true
@@ -385,6 +577,7 @@ func _animate_removal(stick_button: MatchstickButton) -> void:
     tween.set_parallel(false)
     tween.tween_callback(stick_button.queue_free)
 
+
 func _remove_one_computer_match(row_index: int) -> void:
     var children := match_rows[row_index].get_children()
     for i in range(children.size() - 1, -1, -1):
@@ -393,9 +586,11 @@ func _remove_one_computer_match(row_index: int) -> void:
             _animate_removal(child)
             return
 
+
 func _refresh_ui() -> void:
     _refresh_counts_only()
     _refresh_match_interaction()
+
     match phase:
         Phase.PLAYER:
             status_label.text = "YOUR TURN"
@@ -419,11 +614,13 @@ func _refresh_ui() -> void:
             action_button.disabled = false
             undo_button.disabled = true
 
+
 func _refresh_counts_only() -> void:
     remaining_label.text = "%d MATCH%s LEFT" % [_total_matches(), "" if _total_matches() == 1 else "ES"]
     setup_label.text = "ROWS: %s" % _position_string()
     for i in range(mini(count_labels.size(), piles.size())):
         count_labels[i].text = str(piles[i])
+
 
 func _refresh_match_interaction() -> void:
     for row_index in range(match_rows.size()):
@@ -434,6 +631,7 @@ func _refresh_match_interaction() -> void:
             if child is MatchstickButton:
                 child.set_turn_enabled(enabled)
 
+
 func _finish_game(player_won: bool, explanation: String) -> void:
     phase = Phase.GAME_OVER
     game_serial += 1
@@ -441,6 +639,9 @@ func _finish_game(player_won: bool, explanation: String) -> void:
     removed_this_turn = 0
     message_label.text = ("YOU WIN!  " if player_won else "COMPUTER WINS.  ") + explanation
     _refresh_ui()
+    _show_result_overlay(player_won, explanation)
+    _play_result_sound(player_won)
+
 
 func _total_matches() -> int:
     var total := 0
@@ -448,11 +649,13 @@ func _total_matches() -> int:
         total += value
     return total
 
+
 func _position_string() -> String:
     var parts: Array[String] = []
     for value in piles:
         parts.append(str(value))
     return "–".join(parts)
+
 
 func _make_button(text_value: String, primary: bool) -> Button:
     var button := Button.new()
@@ -464,6 +667,7 @@ func _make_button(text_value: String, primary: bool) -> Button:
     button.add_theme_stylebox_override("hover", _style(RED_DARK if primary else Color("#ddcfb1"), 7, 1, RED_DARK if primary else Color("#a99570")))
     button.add_theme_stylebox_override("pressed", _style(Color("#57201c") if primary else Color("#d2c19f"), 7, 1, RED_DARK if primary else Color("#9f8a65")))
     return button
+
 
 func _style(bg: Color, radius: int, border: int = 0, border_color: Color = Color.TRANSPARENT) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
@@ -482,6 +686,7 @@ func _style(bg: Color, radius: int, border: int = 0, border_color: Color = Color
     style.content_margin_top = 4
     style.content_margin_bottom = 4
     return style
+
 
 func _clear_container(container: Node) -> void:
     for child in container.get_children():
