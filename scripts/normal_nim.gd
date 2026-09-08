@@ -1,6 +1,6 @@
 extends Control
 
-# Matchstick Nim — normal play.
+# Matchstick Nim — normal play with a fixed 3–5–7 setup.
 # Remove one or more matches from one row. Taking the final match WINS.
 
 const TABLE := Color("#241813")
@@ -12,9 +12,7 @@ const RED := Color("#8f3029")
 const RED_DARK := Color("#68211d")
 const GREEN := Color("#486f52")
 const COMPUTER_MATCH_DELAY := 0.5
-const ROW_COUNT := 4
-const MIN_MATCHES := 1
-const MAX_MATCHES := 7
+const STARTING_PILES: Array[int] = [3, 5, 7]
 
 enum Phase { PLAYER, COMPUTER, GAME_OVER }
 
@@ -47,10 +45,9 @@ class MatchstickButton:
         mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if value else Control.CURSOR_ARROW
         queue_redraw()
 
-
 var rng := RandomNumberGenerator.new()
 var phase: Phase = Phase.PLAYER
-var piles: Array[int] = [1, 3, 5, 7]
+var piles: Array[int] = STARTING_PILES.duplicate()
 var turn_start_piles: Array[int] = []
 var selected_row := -1
 var removed_this_turn := 0
@@ -79,14 +76,12 @@ var result_panel: PanelContainer
 var result_title: Label
 var result_subtitle: Label
 
-
 func _ready() -> void:
     rng.randomize()
     _build_ui()
     _build_audio()
     _build_result_overlay()
     _start_new_game()
-
 
 func _build_ui() -> void:
     var bg := ColorRect.new()
@@ -117,13 +112,15 @@ func _build_ui() -> void:
     var title_box := VBoxContainer.new()
     title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     header.add_child(title_box)
+
     var title := Label.new()
     title.text = "THE GAME OF NIM"
     title.add_theme_color_override("font_color", PAPER)
     title.add_theme_font_size_override("font_size", 24)
     title_box.add_child(title)
+
     var subtitle := Label.new()
-    subtitle.text = "Matchstick edition  •  4 random rows  •  Last match wins"
+    subtitle.text = "Matchstick edition  •  Fixed setup: 3–5–7  •  Last match wins"
     subtitle.add_theme_color_override("font_color", Color("#cfbea9"))
     subtitle.add_theme_font_size_override("font_size", 11)
     title_box.add_child(subtitle)
@@ -132,20 +129,23 @@ func _build_ui() -> void:
     controls.alignment = BoxContainer.ALIGNMENT_END
     controls.add_theme_constant_override("separation", 6)
     header.add_child(controls)
+
     var first_label := Label.new()
     first_label.text = "FIRST:"
     first_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     first_label.add_theme_color_override("font_color", Color("#cfbea9"))
     first_label.add_theme_font_size_override("font_size", 11)
     controls.add_child(first_label)
+
     start_option = OptionButton.new()
     start_option.add_item("Computer")
     start_option.add_item("You")
     start_option.selected = 0
     start_option.custom_minimum_size = Vector2(108, 34)
     controls.add_child(start_option)
-    var new_game := _make_button("NEW RANDOM GAME", false)
-    new_game.custom_minimum_size = Vector2(145, 34)
+
+    var new_game := _make_button("NEW GAME (3–5–7)", false)
+    new_game.custom_minimum_size = Vector2(150, 34)
     new_game.pressed.connect(_start_new_game)
     controls.add_child(new_game)
 
@@ -171,12 +171,15 @@ func _build_ui() -> void:
     var top := HBoxContainer.new()
     top.custom_minimum_size.y = 36
     board_v.add_child(top)
+
     var status_box := VBoxContainer.new()
     status_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     top.add_child(status_box)
+
     status_label = Label.new()
     status_label.add_theme_font_size_override("font_size", 17)
     status_box.add_child(status_label)
+
     substatus_label = Label.new()
     substatus_label.add_theme_color_override("font_color", MUTED)
     substatus_label.add_theme_font_size_override("font_size", 10)
@@ -185,11 +188,13 @@ func _build_ui() -> void:
     var info := VBoxContainer.new()
     info.alignment = BoxContainer.ALIGNMENT_CENTER
     top.add_child(info)
+
     remaining_label = Label.new()
     remaining_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
     remaining_label.add_theme_color_override("font_color", MUTED)
     remaining_label.add_theme_font_size_override("font_size", 11)
     info.add_child(remaining_label)
+
     setup_label = Label.new()
     setup_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
     setup_label.add_theme_color_override("font_color", INK)
@@ -224,15 +229,16 @@ func _build_ui() -> void:
     actions.alignment = BoxContainer.ALIGNMENT_CENTER
     actions.add_theme_constant_override("separation", 7)
     board_v.add_child(actions)
+
     undo_button = _make_button("UNDO PICKS", false)
     undo_button.custom_minimum_size = Vector2(115, 34)
     undo_button.pressed.connect(_undo_player_turn)
     actions.add_child(undo_button)
+
     action_button = _make_button("END MY TURN →", true)
     action_button.custom_minimum_size = Vector2(185, 36)
     action_button.pressed.connect(_on_action_button)
     actions.add_child(action_button)
-
 
 func _build_audio() -> void:
     match_sound_player = AudioStreamPlayer.new()
@@ -243,11 +249,9 @@ func _build_audio() -> void:
     result_sound_player.volume_db = -2.0
     add_child(result_sound_player)
 
-    # Two quick high partials give each removal a small metallic clink/tink.
     match_sound = _make_tone_sequence([2200.0, 3350.0], 0.024, 0.22)
     win_sound = _make_tone_sequence([523.25, 659.25, 783.99, 1046.50], 0.12, 0.32)
     lose_sound = _make_tone_sequence([392.0, 311.13, 246.94, 196.0], 0.15, 0.30)
-
 
 func _make_tone_sequence(frequencies: Array, note_length: float, volume: float) -> AudioStreamWAV:
     var sample_rate := 22050
@@ -274,7 +278,6 @@ func _make_tone_sequence(frequencies: Array, note_length: float, volume: float) 
     stream.data = bytes
     return stream
 
-
 func _play_match_sound() -> void:
     if match_sound_player == null or match_sound == null:
         return
@@ -282,14 +285,12 @@ func _play_match_sound() -> void:
     match_sound_player.pitch_scale = rng.randf_range(0.93, 1.07)
     match_sound_player.play()
 
-
 func _play_result_sound(player_won: bool) -> void:
     if result_sound_player == null:
         return
     result_sound_player.stream = win_sound if player_won else lose_sound
     result_sound_player.pitch_scale = 1.0
     result_sound_player.play()
-
 
 func _build_result_overlay() -> void:
     result_overlay = Control.new()
@@ -315,19 +316,19 @@ func _build_result_overlay() -> void:
     result_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
     center.add_child(result_panel)
 
-    var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 32)
-    margin.add_theme_constant_override("margin_right", 32)
-    margin.add_theme_constant_override("margin_top", 24)
-    margin.add_theme_constant_override("margin_bottom", 24)
-    margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    result_panel.add_child(margin)
+    var overlay_margin := MarginContainer.new()
+    overlay_margin.add_theme_constant_override("margin_left", 32)
+    overlay_margin.add_theme_constant_override("margin_right", 32)
+    overlay_margin.add_theme_constant_override("margin_top", 24)
+    overlay_margin.add_theme_constant_override("margin_bottom", 24)
+    overlay_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    result_panel.add_child(overlay_margin)
 
     var result_box := VBoxContainer.new()
     result_box.alignment = BoxContainer.ALIGNMENT_CENTER
     result_box.add_theme_constant_override("separation", 8)
     result_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    margin.add_child(result_box)
+    overlay_margin.add_child(result_box)
 
     result_title = Label.new()
     result_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -343,13 +344,12 @@ func _build_result_overlay() -> void:
     result_box.add_child(result_subtitle)
 
     var again_hint := Label.new()
-    again_hint.text = "Press PLAY AGAIN below for a new random board"
+    again_hint.text = "Press PLAY AGAIN below to reset the 3–5–7 board"
     again_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     again_hint.add_theme_color_override("font_color", Color("#d6c9b8"))
     again_hint.add_theme_font_size_override("font_size", 12)
     again_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
     result_box.add_child(again_hint)
-
 
 func _show_result_overlay(player_won: bool, explanation: String) -> void:
     if result_overlay == null:
@@ -368,7 +368,6 @@ func _show_result_overlay(player_won: bool, explanation: String) -> void:
     var tween := create_tween()
     tween.tween_property(result_overlay, "modulate:a", 1.0, 0.22)
 
-
 func _hide_result_overlay() -> void:
     if result_overlay != null:
         result_overlay.visible = false
@@ -376,29 +375,21 @@ func _hide_result_overlay() -> void:
     if result_sound_player != null:
         result_sound_player.stop()
 
-
-func _randomize_piles() -> Array[int]:
-    var result: Array[int] = []
-    for _i in range(ROW_COUNT):
-        result.append(rng.randi_range(MIN_MATCHES, MAX_MATCHES))
-    return result
-
-
 func _start_new_game() -> void:
     _hide_result_overlay()
     game_serial += 1
-    piles = _randomize_piles()
+    piles = STARTING_PILES.duplicate()
     selected_row = -1
     removed_this_turn = 0
     _build_match_rows()
+
     if start_option.selected == 0:
         phase = Phase.COMPUTER
-        message_label.text = "New board: %s. Computer goes first." % _position_string()
+        message_label.text = "Board: 3–5–7. Computer goes first."
         _refresh_ui()
         _computer_turn(game_serial)
     else:
-        _begin_player_turn("New board: %s. You go first." % _position_string())
-
+        _begin_player_turn("Board: 3–5–7. You go first.")
 
 func _begin_player_turn(message: String = "Your turn. Remove matches from one row.") -> void:
     phase = Phase.PLAYER
@@ -408,11 +399,11 @@ func _begin_player_turn(message: String = "Your turn. Remove matches from one ro
     message_label.text = message
     _refresh_ui()
 
-
 func _build_match_rows() -> void:
     _clear_container(rows_box)
     match_rows.clear()
     count_labels.clear()
+
     for row_index in range(piles.size()):
         var row := HBoxContainer.new()
         row.custom_minimum_size.y = 60
@@ -454,7 +445,6 @@ func _build_match_rows() -> void:
 
     _refresh_match_interaction()
 
-
 func _on_match_pressed(row_index: int, stick_button: MatchstickButton) -> void:
     if phase != Phase.PLAYER:
         return
@@ -475,13 +465,11 @@ func _on_match_pressed(row_index: int, stick_button: MatchstickButton) -> void:
     message_label.text = "You removed %d match%s from Row %d." % [removed_this_turn, "" if removed_this_turn == 1 else "es", row_index + 1]
     _refresh_ui()
 
-
 func _on_action_button() -> void:
     if phase == Phase.PLAYER:
         _finish_player_turn()
     elif phase == Phase.GAME_OVER:
         _start_new_game()
-
 
 func _finish_player_turn() -> void:
     if phase != Phase.PLAYER or removed_this_turn <= 0:
@@ -490,7 +478,6 @@ func _finish_player_turn() -> void:
     message_label.text = "Your turn is complete. Watch the computer."
     _refresh_ui()
     _computer_turn(game_serial)
-
 
 func _undo_player_turn() -> void:
     if phase != Phase.PLAYER or removed_this_turn <= 0:
@@ -501,7 +488,6 @@ func _undo_player_turn() -> void:
     _build_match_rows()
     message_label.text = "Your picks were restored."
     _refresh_ui()
-
 
 func _computer_turn(serial: int) -> void:
     if serial != game_serial:
@@ -541,7 +527,6 @@ func _computer_turn(serial: int) -> void:
     if serial == game_serial:
         _begin_player_turn("Computer removed %d match%s from Row %d. Your turn." % [amount, "" if amount == 1 else "es", row_index + 1])
 
-
 func _choose_normal_move() -> Dictionary:
     var x := _nim_sum()
     if x != 0:
@@ -561,13 +546,11 @@ func _choose_normal_move() -> Dictionary:
     var chosen := available[rng.randi_range(0, available.size() - 1)]
     return {"row": chosen, "amount": rng.randi_range(1, piles[chosen])}
 
-
 func _nim_sum() -> int:
     var result := 0
     for value in piles:
         result = result ^ value
     return result
-
 
 func _animate_removal(stick_button: MatchstickButton) -> void:
     stick_button.disabled = true
@@ -578,7 +561,6 @@ func _animate_removal(stick_button: MatchstickButton) -> void:
     tween.set_parallel(false)
     tween.tween_callback(stick_button.queue_free)
 
-
 func _remove_one_computer_match(row_index: int) -> void:
     var children := match_rows[row_index].get_children()
     for i in range(children.size() - 1, -1, -1):
@@ -586,7 +568,6 @@ func _remove_one_computer_match(row_index: int) -> void:
         if child is MatchstickButton and not child.is_queued_for_deletion():
             _animate_removal(child)
             return
-
 
 func _refresh_ui() -> void:
     _refresh_counts_only()
@@ -610,18 +591,16 @@ func _refresh_ui() -> void:
         Phase.GAME_OVER:
             status_label.text = "GAME OVER"
             status_label.add_theme_color_override("font_color", RED_DARK)
-            substatus_label.text = "Press PLAY AGAIN for a new random board."
+            substatus_label.text = "Press PLAY AGAIN to reset the 3–5–7 board."
             action_button.text = "PLAY AGAIN"
             action_button.disabled = false
             undo_button.disabled = true
-
 
 func _refresh_counts_only() -> void:
     remaining_label.text = "%d MATCH%s LEFT" % [_total_matches(), "" if _total_matches() == 1 else "ES"]
     setup_label.text = "ROWS: %s" % _position_string()
     for i in range(mini(count_labels.size(), piles.size())):
         count_labels[i].text = str(piles[i])
-
 
 func _refresh_match_interaction() -> void:
     for row_index in range(match_rows.size()):
@@ -631,7 +610,6 @@ func _refresh_match_interaction() -> void:
         for child in row.get_children():
             if child is MatchstickButton:
                 child.set_turn_enabled(enabled)
-
 
 func _finish_game(player_won: bool, explanation: String) -> void:
     phase = Phase.GAME_OVER
@@ -643,20 +621,17 @@ func _finish_game(player_won: bool, explanation: String) -> void:
     _show_result_overlay(player_won, explanation)
     _play_result_sound(player_won)
 
-
 func _total_matches() -> int:
     var total := 0
     for value in piles:
         total += value
     return total
 
-
 func _position_string() -> String:
     var parts: Array[String] = []
     for value in piles:
         parts.append(str(value))
     return "–".join(parts)
-
 
 func _make_button(text_value: String, primary: bool) -> Button:
     var button := Button.new()
@@ -668,7 +643,6 @@ func _make_button(text_value: String, primary: bool) -> Button:
     button.add_theme_stylebox_override("hover", _style(RED_DARK if primary else Color("#ddcfb1"), 7, 1, RED_DARK if primary else Color("#a99570")))
     button.add_theme_stylebox_override("pressed", _style(Color("#57201c") if primary else Color("#d2c19f"), 7, 1, RED_DARK if primary else Color("#9f8a65")))
     return button
-
 
 func _style(bg: Color, radius: int, border: int = 0, border_color: Color = Color.TRANSPARENT) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
@@ -687,7 +661,6 @@ func _style(bg: Color, radius: int, border: int = 0, border_color: Color = Color
     style.content_margin_top = 4
     style.content_margin_bottom = 4
     return style
-
 
 func _clear_container(container: Node) -> void:
     for child in container.get_children():
