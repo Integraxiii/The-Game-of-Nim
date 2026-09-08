@@ -236,14 +236,15 @@ func _build_ui() -> void:
 
 func _build_audio() -> void:
     match_sound_player = AudioStreamPlayer.new()
-    match_sound_player.volume_db = -5.0
+    match_sound_player.volume_db = -6.0
     add_child(match_sound_player)
 
     result_sound_player = AudioStreamPlayer.new()
     result_sound_player.volume_db = -2.0
     add_child(result_sound_player)
 
-    match_sound = _make_tone_sequence([920.0], 0.055, 0.28)
+    # Two quick high partials give each removal a small metallic clink/tink.
+    match_sound = _make_tone_sequence([2200.0, 3350.0], 0.024, 0.22)
     win_sound = _make_tone_sequence([523.25, 659.25, 783.99, 1046.50], 0.12, 0.32)
     lose_sound = _make_tone_sequence([392.0, 311.13, 246.94, 196.0], 0.15, 0.30)
 
@@ -278,7 +279,7 @@ func _play_match_sound() -> void:
     if match_sound_player == null or match_sound == null:
         return
     match_sound_player.stream = match_sound
-    match_sound_player.pitch_scale = rng.randf_range(0.96, 1.04)
+    match_sound_player.pitch_scale = rng.randf_range(0.93, 1.07)
     match_sound_player.play()
 
 
