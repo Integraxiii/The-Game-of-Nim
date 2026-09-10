@@ -1,9 +1,9 @@
 [gd_scene load_steps=3 format=3]
 
-[ext_resource type="Script" path="res://scripts/normal_nim.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/strategy_games.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/background_music.gd" id="2_music"]
 
-[node name="NimMatchstickGame" type="Control"]
+[node name="StrategyGames" type="Control"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
